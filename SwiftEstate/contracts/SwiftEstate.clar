@@ -292,4 +292,74 @@
   )
 )
 
+;; Advanced dispute resolution and emergency cancellation system
+;; Allows parties to initiate disputes and provides emergency cancellation
+;; with automatic refund mechanisms and detailed logging
+(define-public (initiate-dispute-and-emergency-cancel (escrow-id uint) (reason (string-ascii 200)) (emergency-cancel bool))
+  (match (map-get? escrows { escrow-id: escrow-id })
+    escrow-data
+    (if (is-escrow-participant escrow-id tx-sender)
+      (let (
+        (current-status (get status escrow-data))
+        (deposit-amount (get deposit escrow-data))
+        (buyer (get buyer escrow-data))
+        (seller (get seller escrow-data))
+        (deadline-passed (>= block-height (get deadline escrow-data)))
+      )
+        ;; Record dispute first
+        (map-set disputes
+          { escrow-id: escrow-id }
+          {
+            initiator: tx-sender,
+            reason: reason,
+            created-at: block-height,
+            resolved: false,
+            resolution: none
+          }
+        )
+        
+        ;; Handle emergency cancellation logic
+        (if (or emergency-cancel deadline-passed (is-eq current-status STATUS_DISPUTED))
+          (begin
+            ;; Emergency cancellation - refund deposit to buyer
+            (if (> deposit-amount u0)
+              (try! (as-contract (stx-transfer? deposit-amount tx-sender buyer)))
+              true
+            )
+            
+            ;; Update escrow status to cancelled
+            (map-set escrows
+              { escrow-id: escrow-id }
+              (merge escrow-data { status: STATUS_CANCELLED })
+            )
+            
+            ;; Mark dispute as resolved with emergency cancellation
+            (map-set disputes
+              { escrow-id: escrow-id }
+              {
+                initiator: tx-sender,
+                reason: reason,
+                created-at: block-height,
+                resolved: true,
+                resolution: (some "Emergency cancellation executed - funds refunded")
+              }
+            )
+            (ok "Emergency cancellation completed - dispute resolved and funds refunded")
+          )
+          (begin
+            ;; Regular dispute - just mark escrow as disputed
+            (map-set escrows
+              { escrow-id: escrow-id }
+              (merge escrow-data { status: STATUS_DISPUTED })
+            )
+            (ok "Dispute initiated - escrow marked for resolution")
+          )
+        )
+      )
+      ERR_UNAUTHORIZED
+    )
+    ERR_ESCROW_NOT_FOUND
+  )
+)
+
 
